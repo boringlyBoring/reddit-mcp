@@ -1,13 +1,17 @@
 use anyhow::Result;
 use dotenv::dotenv;
 use reqwest::{Client, StatusCode, header};
-use rmcp::tool;
-use std::collections::HashMap;
+use rmcp::{
+    ServerHandler,
+    model::{ServerCapabilities, ServerInfo},
+    tool,
+};
 use std::env;
 
-const BASE_URL: &str = "https://www.reddit.com/api/v1/access_token";
-const AUTH_URL: &str = "{}/authorize?client_id={}&response_type=code&
-    state=RANDOM_STRING&redirect_uri=URI&duration=DURATION&scope=SCOPE_STRING";
+use crate::reddit::models::{AccessTokenRequest, AccessTokenResponse};
+
+const AUTH_URL: &str = "https://www.reddit.com/api/v1/access_token";
+const BASE_URL: &str = "https://oauth.reddit.com/api/v1/{}";
 const USER_AGENT: &str = "reddit:mcp:v1 (by /u/boringly_boring)";
 
 #[derive(Debug, Clone)]
@@ -47,15 +51,20 @@ impl RedditClient {
         }
     }
 
-    async fn get_request<T>(&self, url: &str) -> Result<T, String>
+    async fn get_request<T>(&self, url: &str, auth_token: &str) -> Result<T, String>
     where
         T: serde::de::DeserializeOwned,
     {
         tracing::info!("Making GET request to: {}", url);
 
+        let headers = header::HeaderMap::new();
+
         let response = self
             .client
             .get(url)
+            .headers(headers)
+            .header(header::USER_AGENT, USER_AGENT)
+            .header(header::AUTHORIZATION, auth_token)
             .send()
             .await
             .map_err(|e| format!("Request failed: {}", e))?;
@@ -71,13 +80,10 @@ impl RedditClient {
         }
     }
 
-    async fn post_request<T>(
-        &self,
-        url: &str,
-        post_data: HashMap<String, String>,
-    ) -> Result<T, String>
+    async fn post_request<T, D>(&self, url: &str, post_data: D) -> Result<T, String>
     where
         T: serde::de::DeserializeOwned,
+        D: serde::Serialize,
     {
         tracing::info!("Making POST request to: {}", url);
 
@@ -102,6 +108,42 @@ impl RedditClient {
                 .await
                 .map_err(|e| format!("Failed to parse the request: {}", e)),
             status => Err(format!("Request failed with status: {}", status)),
+        }
+    }
+
+    #[tool(description = "Get access_token to authenticate from reddit")]
+    async fn get_access_token(&self) -> String {
+        tracing::info!("Calling /api/access_token to get Authorization token");
+
+        let access_token_request = AccessTokenRequest {
+            grant_type: "password".to_string(),
+            username: self.username.clone(),
+            password: self.password.clone(),
+        };
+
+        let access_token_response = self
+            .post_request::<AccessTokenResponse, AccessTokenRequest>(
+                &AUTH_URL,
+                access_token_request,
+            )
+            .await;
+
+        match access_token_response {
+            Ok(token) => token.access_token,
+            Err(e) => {
+                tracing::error!("Failed to fetch the access token: {}", e);
+                "Unable to fetch access_token from reddit".to_string()
+            }
+        }
+    }
+}
+
+impl ServerHandler for RedditClient {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            instructions: Some("A MCP server for accessing Reddit".into()),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            ..Default::default()
         }
     }
 }
