@@ -12,3 +12,13 @@ pub struct AccessTokenResponse {
     pub scope: String,
     pub token_type: String,
 }
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SearchSubredditNameRequest {
+    pub exact: bool,
+    pub include_over_18: bool,
+    pub include_unadvertisable: bool,
+    pub query: String,
+    pub search_query_id: String,
+    pub typeahead_active: bool,
+}

@@ -4,14 +4,15 @@ use reqwest::{Client, StatusCode, header};
 use rmcp::{
     ServerHandler,
     model::{ServerCapabilities, ServerInfo},
-    tool,
+    schemars, tool,
 };
 use std::env;
+use uuid::Uuid;
 
-use crate::reddit::models::{AccessTokenRequest, AccessTokenResponse};
+use crate::reddit::models::{AccessTokenRequest, AccessTokenResponse, SearchSubredditNameRequest};
 
 const AUTH_URL: &str = "https://www.reddit.com/api/v1/access_token";
-const BASE_URL: &str = "https://oauth.reddit.com/api/v1/{}";
+const BASE_URL: &str = "https://oauth.reddit.com/api";
 const USER_AGENT: &str = "reddit:mcp:v1 (by /u/boringly_boring)";
 
 #[derive(Debug, Clone)]
@@ -51,9 +52,15 @@ impl RedditClient {
         }
     }
 
-    async fn get_request<T>(&self, url: &str, auth_token: &str) -> Result<T, String>
+    async fn get_request<T, D>(
+        &self,
+        url: &str,
+        auth_token: &str,
+        json_data: D,
+    ) -> Result<T, String>
     where
         T: serde::de::DeserializeOwned,
+        D: serde::Serialize,
     {
         tracing::info!("Making GET request to: {}", url);
 
@@ -65,6 +72,7 @@ impl RedditClient {
             .headers(headers)
             .header(header::USER_AGENT, USER_AGENT)
             .header(header::AUTHORIZATION, auth_token)
+            .query(&json_data)
             .send()
             .await
             .map_err(|e| format!("Request failed: {}", e))?;
@@ -136,8 +144,62 @@ impl RedditClient {
             }
         }
     }
+
+    #[tool(description = "List subreddit names that begin with a query string.")]
+    async fn search_subreddit_names(
+        &self,
+        #[tool(param)]
+        #[schemars(description = "Subreddits whose names begin with query will be returned")]
+        query: String,
+        #[tool(param)]
+        #[schemars(description = "If exact is true, only an exact match will be returned.")]
+        exact: bool,
+        #[tool(param)]
+        #[schemars(
+            description = "If include_over_18 is false, subreddits with over-18 content restrictions will be filtered from the results."
+        )]
+        include_over_18: bool,
+        #[tool(param)]
+        #[schemars(
+            description = "If include_unadvertisable is False, subreddits that have hide_ads set to True or are on the anti_ads_subreddits list will be filtered."
+        )]
+        include_unadvertisable: bool,
+        #[tool(param)]
+        #[schemars(description = "If type_ahead is False")]
+        type_ahead: bool,
+        #[tool(param)]
+        #[schemars(
+            description = "Access token from reddit access_token api to authenticate requests"
+        )]
+        access_token: String,
+    ) -> Result<String, String> {
+        tracing::info!("Calling /api/search_reddit_names.json");
+
+        let url = format!("{}/search_reddit_names", BASE_URL);
+        let uuid = Uuid::new_v4();
+        let auth_token = format!("Bearer {}", access_token);
+
+        let search_subreddit_names_request = SearchSubredditNameRequest {
+            exact: exact,
+            include_over_18: include_over_18,
+            include_unadvertisable: include_unadvertisable,
+            query: query,
+            search_query_id: uuid.to_string(),
+            typeahead_active: type_ahead,
+        };
+
+        let search_response = self
+            .get_request::<String, SearchSubredditNameRequest>(
+                &url,
+                &auth_token,
+                search_subreddit_names_request,
+            )
+            .await;
+        search_response
+    }
 }
 
+#[tool(tool_box)]
 impl ServerHandler for RedditClient {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
